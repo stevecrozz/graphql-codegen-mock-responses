@@ -1,8 +1,11 @@
 {
   "name": "graphql-codegen-mock-responses",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GraphQL Codegen plugin that generates typed factory functions for operation responses",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
