@@ -52,11 +52,11 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id name email age } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes("import { faker } from '@faker-js/faker'"));
-        assert.ok(output.includes("import { GetUserQuery } from './types'"));
+        assert.ok(output.includes("import { GetUserQuery } from './operations'"));
         assert.ok(output.includes('export const aGetUserQueryResponse'));
         assert.ok(output.includes('faker.string.uuid()'));
         assert.ok(output.includes('faker.lorem.word()'));
@@ -67,7 +67,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id avatar { id url } } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('avatar:'));
@@ -78,7 +78,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { __typename id } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes("__typename: 'User' as const"));
@@ -90,7 +90,7 @@ describe('graphql-codegen-mock-responses', () => {
             makeDocs([
                 `query Search($q: String!) { search(q: $q) { __typename ... on User { id name } ... on Document { id title } } }`,
             ]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('applyBranchedArrayOverride'));
@@ -102,14 +102,14 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id email } }`]),
-            { typesFile: './types', scalars: { String: 'faker.internet.email()' } },
+            { typesFile: './types', operationTypesFile: './operations', scalars: { String: 'faker.internet.email()' } },
         );
         const output = String(result);
         assert.ok(output.includes('faker.internet.email()'));
     });
 
     it('returns empty string with no operations', () => {
-        const result = plugin(schema, makeDocs([`fragment F on User { id }`]), { typesFile: './types' });
+        const result = plugin(schema, makeDocs([`fragment F on User { id }`]), { typesFile: './types', operationTypesFile: './operations' });
         assert.equal(String(result), '');
     });
 
@@ -124,7 +124,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUsers { users { id name } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('applyArrayOverride'));
@@ -134,7 +134,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUsers { users { id name } }`]),
-            { typesFile: './types', listElementCount: 3 },
+            { typesFile: './types', operationTypesFile: './operations', listElementCount: 3 },
         );
         const output = String(result);
         assert.ok(output.includes(', 3)'));
@@ -147,7 +147,7 @@ describe('graphql-codegen-mock-responses', () => {
                 `fragment UserFields on User { id name email }`,
                 `query GetUser($id: ID!) { user(id: $id) { ...UserFields avatar { id url } } }`,
             ]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('export const aGetUserQueryResponse'));
@@ -160,7 +160,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { identifier: id displayName: name } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('identifier:'));
@@ -168,21 +168,22 @@ describe('graphql-codegen-mock-responses', () => {
         assert.ok(!output.includes(' id:'));
     });
 
-    it('generates enum values', () => {
+    it('generates enum values as member references', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id status } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
-        assert.ok(output.includes("'ACTIVE'"));
+        assert.ok(output.includes('Status.Active'));
+        assert.ok(output.includes("import { Status } from './types'"));
     });
 
     it('generates a mutation factory', () => {
         const result = plugin(
             schema,
             makeDocs([`mutation CreateUser($name: String!) { createUser(name: $name) { id name } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('export const aCreateUserMutationResponse'));
@@ -193,7 +194,7 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id } }`]),
-            { typesFile: './types', prefix: 'mock' },
+            { typesFile: './types', operationTypesFile: './operations', prefix: 'mock' },
         );
         const output = String(result);
         assert.ok(output.includes('export const mockGetUserQueryResponse'));
@@ -206,12 +207,12 @@ describe('graphql-codegen-mock-responses', () => {
                 `query GetUser($id: ID!) { user(id: $id) { id } }`,
                 `query GetUsers { users { id } }`,
             ]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('export const aGetUserQueryResponse'));
         assert.ok(output.includes('export const aGetUsersQueryResponse'));
-        assert.ok(output.includes('GetUserQuery, GetUsersQuery'));
+        assert.ok(output.includes("import { GetUserQuery, GetUsersQuery } from './operations'"));
     });
 
     it('throws on duplicate operation names', () => {
@@ -222,7 +223,7 @@ describe('graphql-codegen-mock-responses', () => {
                     `query GetUser($id: ID!) { user(id: $id) { id } }`,
                     `query GetUser($id: ID!) { user(id: $id) { id name } }`,
                 ]),
-                { typesFile: './types' },
+                { typesFile: './types', operationTypesFile: './operations' },
             ),
             /two operations named "GetUser"/,
         );
@@ -232,10 +233,61 @@ describe('graphql-codegen-mock-responses', () => {
         const result = plugin(
             schema,
             makeDocs([`query GetUser($id: ID!) { user(id: $id) { id friends { id name } } }`]),
-            { typesFile: './types' },
+            { typesFile: './types', operationTypesFile: './operations' },
         );
         const output = String(result);
         assert.ok(output.includes('friends:'));
         assert.ok(output.includes('applyArrayOverride'));
+    });
+
+    it('throws when operationTypesFile is not set', () => {
+        assert.throws(
+            () => plugin(schema, makeDocs([`query GetUser($id: ID!) { user(id: $id) { id } }`]), { typesFile: './types' } as any),
+            /operationTypesFile/,
+        );
+    });
+
+    it('merges duplicate field selections from fragments and inline', () => {
+        const result = plugin(
+            schema,
+            makeDocs([
+                `fragment AvatarBasic on Avatar { id }`,
+                `query GetUser($id: ID!) { user(id: $id) { avatar { ...AvatarBasic url } } }`,
+            ]),
+            { typesFile: './types', operationTypesFile: './operations' },
+        );
+        const output = String(result);
+        assert.ok(output.includes('id:'));
+        assert.ok(output.includes('url:'));
+    });
+
+    it('merges overlapping field sub-selections from fragment and direct selection', () => {
+        const schemaWithParent = buildSchema(`
+            type Query { user(id: ID!): User }
+            type User { id: ID!, parent: Parent }
+            type Parent { id: ID!, name: String! }
+        `);
+        const result = plugin(
+            schemaWithParent,
+            makeDocs([
+                `fragment UserBase on User { id parent { id } }`,
+                `query GetUser($id: ID!) { user(id: $id) { ...UserBase parent { id name } } }`,
+            ]),
+            { typesFile: './types', operationTypesFile: './operations' },
+        );
+        const output = String(result);
+        assert.ok(output.includes('name:'), 'should include name from direct selection');
+    });
+
+    it('uses applyBranchedArrayOverride for single-branch union arrays with __typename', () => {
+        const result = plugin(
+            schema,
+            makeDocs([
+                `query Search($q: String!) { search(q: $q) { __typename ... on User { id name } } }`,
+            ]),
+            { typesFile: './types', operationTypesFile: './operations' },
+        );
+        const output = String(result);
+        assert.ok(output.includes('applyBranchedArrayOverride'));
     });
 });

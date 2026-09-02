@@ -13,12 +13,14 @@ type _PerBranchPartial<T> = T extends object ? { [K in keyof T]?: _Field<T[K]> }
 
 type _Field<T> = [T] extends [never]
     ? T
+    : 0 extends (1 & T) ? T
     : _HasMultipleBranches<NonNullable<T>> extends true
         ? _PerBranchPartial<NonNullable<T>> | ((b: Branches<NonNullable<T>>) => NonNullable<T>)
         : DeepPartial<T>;
 
 type DeepPartial<T> = [T] extends [never]
     ? T
+    : 0 extends (1 & T) ? T
     : [T] extends [Array<infer U>]
         ? _HasMultipleBranches<NonNullable<U>> extends true
             ? T | ((b: Branches<NonNullable<U>>) => U[])
@@ -52,9 +54,9 @@ function mergeOverrides<T>(defaults: T, overrides: _NoInfer<DeepPartial<T>> | un
     return out;
 }
 
-function applyArrayOverride<T>(
+function applyArrayOverride<T, O>(
     makeDefault: (o?: DeepPartial<T>) => T,
-    override: Array<DeepPartial<T>> | ((m: (o?: DeepPartial<T>) => T) => T[]) | null | undefined,
+    override: O,
     count: number,
 ): T[] {
     if (override === null || override === undefined) {
@@ -79,10 +81,10 @@ function pickByCallback<T>(
     return branches[defaultBranch](override ?? undefined);
 }
 
-function applyBranchedArrayOverride<T>(
+function applyBranchedArrayOverride<T, O>(
     branches: Record<string, (o?: any) => T>,
     defaultBranch: string,
-    override: T[] | ((b: Record<string, (o?: any) => T>) => T[]) | null | undefined,
+    override: O,
     count: number,
 ): T[] {
     if (override === null || override === undefined) {
@@ -93,6 +95,6 @@ function applyBranchedArrayOverride<T>(
     if (typeof override === 'function') {
         return (override as (b: Record<string, (o?: any) => T>) => T[])(branches);
     }
-    return override;
+    return override as T[];
 }
 `;

@@ -27,7 +27,6 @@ import { LeafGenerator } from './leafGenerator.js';
 export interface BuildOperationFactoriesArgs {
     schema: GraphQLSchema;
     documents: Types.DocumentFile[];
-    typesFile: string;
     listElementCount: number;
     prefix: string | undefined;
     generateLeaf: LeafGenerator;
@@ -280,7 +279,7 @@ const walkField = (
         const isAbstract = isInterfaceType(innerNamed) || isUnionType(innerNamed);
         if (isAbstract && field.selectionSet && selectsTypename(field.selectionSet, ctx.fragments)) {
             const branches = selectedBranches(ctx.schema, innerNamed!, field.selectionSet, ctx.fragments);
-            if (branches.length >= 2) {
+            if (branches.length >= 1) {
                 const branchEntries: string[] = [];
                 for (const branch of branches) {
                     const literal = walkSelectionSet(field.selectionSet, branch, ctx, '_o');
@@ -328,13 +327,53 @@ const walkField = (
     if ((isInterfaceType(named) || isUnionType(named)) && field.selectionSet) {
         if (selectsTypename(field.selectionSet, ctx.fragments)) {
             const branches = selectedBranches(ctx.schema, named, field.selectionSet, ctx.fragments);
-            if (branches.length >= 2) {
+            if (branches.length >= 1) {
                 return `${aliasOrName}: ${emitCallbackDispatch(field.selectionSet, named, ctx, childOverride)}`;
             }
         }
         return `${aliasOrName}: ${walkSelectionSet(field.selectionSet, named, ctx, `(${childOverride} as any)`)}`;
     }
     return `${aliasOrName}: null`;
+};
+
+const mergeFieldNodes = (a: FieldNode, b: FieldNode): FieldNode => {
+    if (!a.selectionSet) return b;
+    if (!b.selectionSet) return a;
+    return {
+        ...a,
+        selectionSet: {
+            kind: Kind.SELECTION_SET,
+            selections: [...a.selectionSet.selections, ...b.selectionSet.selections],
+        },
+    };
+};
+
+const collectFields = (
+    selectionSet: SelectionSetNode,
+    concrete: GraphQLObjectType,
+    ctx: WalkContext,
+    seenFragments: Set<string>,
+    merged: Map<string, FieldNode>,
+): void => {
+    for (const sel of selectionSet.selections) {
+        if (sel.kind === Kind.FIELD) {
+            const key = sel.alias?.value ?? sel.name.value;
+            const existing = merged.get(key);
+            merged.set(key, existing ? mergeFieldNodes(existing, sel) : sel);
+        } else if (sel.kind === Kind.INLINE_FRAGMENT) {
+            const cond = sel.typeCondition?.name.value;
+            if (cond && !typeConditionMatches(ctx.schema, concrete, cond)) continue;
+            collectFields(sel.selectionSet, concrete, ctx, seenFragments, merged);
+        } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
+            if (seenFragments.has(sel.name.value)) continue;
+            const frag = ctx.fragments.get(sel.name.value);
+            if (!frag) continue;
+            const fragCond = frag.typeCondition.name.value;
+            if (!typeConditionMatches(ctx.schema, concrete, fragCond)) continue;
+            seenFragments.add(sel.name.value);
+            collectFields(frag.selectionSet, concrete, ctx, seenFragments, merged);
+        }
+    }
 };
 
 const walkSelectionSet = (
@@ -352,50 +391,14 @@ const walkSelectionSet = (
         concrete = picked;
     }
 
-    const entries: string[] = [];
-    const seenFragments = new Set<string>();
-    const seenFields = new Set<string>();
-    collectFieldSelections(selectionSet, concrete, ctx, overrideAccess, entries, seenFragments, seenFields);
-    return `{\n            ${entries.join(',\n            ')},\n        }`;
-};
+    const merged = new Map<string, FieldNode>();
+    collectFields(selectionSet, concrete, ctx, new Set(), merged);
 
-const collectFieldSelections = (
-    selectionSet: SelectionSetNode,
-    concrete: GraphQLObjectType,
-    ctx: WalkContext,
-    overrideAccess: string,
-    entries: string[],
-    seenFragments: Set<string>,
-    seenFields: Set<string>,
-): void => {
-    for (const sel of selectionSet.selections) {
-        if (sel.kind === Kind.FIELD) {
-            const key = sel.alias?.value ?? sel.name.value;
-            if (seenFields.has(key)) continue;
-            seenFields.add(key);
-            entries.push(walkField(sel, concrete, ctx, overrideAccess));
-        } else if (sel.kind === Kind.INLINE_FRAGMENT) {
-            const cond = sel.typeCondition?.name.value;
-            if (cond && !typeConditionMatches(ctx.schema, concrete, cond)) continue;
-            collectFieldSelections(sel.selectionSet, concrete, ctx, overrideAccess, entries, seenFragments, seenFields);
-        } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
-            if (seenFragments.has(sel.name.value)) continue;
-            const frag = ctx.fragments.get(sel.name.value);
-            if (!frag) continue;
-            const fragCond = frag.typeCondition.name.value;
-            if (!typeConditionMatches(ctx.schema, concrete, fragCond)) continue;
-            seenFragments.add(sel.name.value);
-            collectFieldSelections(
-                frag.selectionSet,
-                concrete,
-                ctx,
-                overrideAccess,
-                entries,
-                seenFragments,
-                seenFields,
-            );
-        }
+    const entries: string[] = [];
+    for (const field of merged.values()) {
+        entries.push(walkField(field, concrete, ctx, overrideAccess));
     }
+    return `{\n            ${entries.join(',\n            ')},\n        }`;
 };
 
 const typeConditionMatches = (schema: GraphQLSchema, concrete: GraphQLObjectType, conditionName: string): boolean => {
