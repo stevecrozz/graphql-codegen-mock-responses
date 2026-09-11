@@ -437,8 +437,10 @@ const buildFactory = (
     const literal = walkSelectionSet(op.selectionSet, opType, ctx, 'overrides');
     const closures = ctx.closures.join('\n');
     return `
+export type ${typeName}Overrides = DeepPartial<${typeName}>;
+
 export const ${fnName} = (
-    overrides?: DeepPartial<${typeName}>,
+    overrides?: ${typeName}Overrides,
 ): ${typeName} => {${closures}
     const defaults: ${typeName} = ${literal};
     return mergeOverrides(defaults, overrides);

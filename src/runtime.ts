@@ -18,13 +18,13 @@ type _Field<T> = [T] extends [never]
         ? _PerBranchPartial<NonNullable<T>> | ((b: Branches<NonNullable<T>>) => NonNullable<T>)
         : DeepPartial<T>;
 
-type DeepPartial<T> = [T] extends [never]
+export type DeepPartial<T> = [T] extends [never]
     ? T
     : 0 extends (1 & T) ? T
-    : [T] extends [Array<infer U>]
-        ? _HasMultipleBranches<NonNullable<U>> extends true
-            ? T | ((b: Branches<NonNullable<U>>) => U[])
-            : Array<DeepPartial<U>> | ((make: (o?: DeepPartial<U>) => U) => U[])
+    : [NonNullable<T>] extends [Array<infer U>]
+        ? Extract<T, null | undefined> | (_HasMultipleBranches<NonNullable<U>> extends true
+            ? Array<U> | ((b: Branches<NonNullable<U>>) => U[])
+            : Array<DeepPartial<U>> | ((make: (o?: DeepPartial<U>) => U) => U[]))
         : T extends object ? { [K in keyof T]?: _Field<T[K]> } : T;
 
 type _NoInfer<T> = [T][T extends any ? 0 : never];
