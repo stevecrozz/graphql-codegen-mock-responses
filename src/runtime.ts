@@ -54,6 +54,11 @@ function mergeOverrides<T>(defaults: T, overrides: _NoInfer<DeepPartial<T>> | un
     return out;
 }
 
+function _hasOverride(overrides: unknown, key: string): boolean {
+    if (typeof overrides !== 'object' || overrides === null) return false;
+    return (overrides as Record<string, unknown>)[key] !== undefined;
+}
+
 function applyArrayOverride<T, O>(
     makeDefault: (o?: DeepPartial<T>) => T,
     override: O,

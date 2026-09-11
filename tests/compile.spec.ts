@@ -285,6 +285,186 @@ describe('generated output compiles and runs', () => {
         assertTypeErrors(project, [/'name' does not exist in type/]);
     });
 
+    it('omits fields gated on @skip / @include', async () => {
+        const project = await generate('conditional-omit', {
+            schema,
+            documents: [
+                `query GetUser($withName: Boolean!, $hideTags: Boolean!) {
+                    user { id name @include(if: $withName) }
+                    tags @skip(if: $hideTags)
+                }`,
+            ],
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const bare = aGetUserQueryResponse();
+            `,
+        });
+        assertCompiles(project);
+
+        const { bare } = (await project.load()) as any;
+        assert.deepEqual(Object.keys(bare), ['user']);
+        assert.deepEqual(Object.keys(bare.user), ['id']);
+    });
+
+    it('restores a gated field completely when it is overridden', async () => {
+        const project = await generate('conditional-override', {
+            schema,
+            documents: [
+                `query GetUser($flag: Boolean!) {
+                    user @include(if: $flag) { id name }
+                    tags @include(if: $flag)
+                }`,
+            ],
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const withUser = aGetUserQueryResponse({ user: { name: 'Alice' } });
+                export const withTags = aGetUserQueryResponse({ tags: ['a'] });
+            `,
+        });
+        assertCompiles(project);
+
+        const { withUser, withTags } = (await project.load()) as any;
+        // The whole object, not just the overridden key — the payload has to satisfy the
+        // type it claims.
+        assert.deepEqual(Object.keys(withUser), ['user']);
+        assert.deepEqual(Object.keys(withUser.user), ['id', 'name']);
+        assert.equal(withUser.user.name, 'Alice');
+        assert.equal(typeof withUser.user.id, 'string');
+        assert.deepEqual(Object.keys(withTags), ['tags']);
+        assert.deepEqual(withTags.tags, ['a']);
+    });
+
+    it('treats a field as conditional only when every occurrence is gated', async () => {
+        const project = await generate('conditional-merged', {
+            schema,
+            documents: [
+                `query GetUser($flag: Boolean!) {
+                    user {
+                        id
+                        name @include(if: $flag)
+                        ...UserName
+                        age @skip(if: $flag)
+                        status @skip(if: false)
+                    }
+                }
+                fragment UserName on User { name }`,
+            ],
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const result = aGetUserQueryResponse();
+            `,
+        });
+        assertCompiles(project);
+
+        const { result } = (await project.load()) as any;
+        // name: gated in one occurrence, ungated in the fragment, so always present.
+        // status: @skip(if: false) resolves statically to "always sent".
+        // age: gated everywhere, so omitted.
+        assert.deepEqual(Object.keys(result.user), ['id', 'name', 'status']);
+    });
+
+    it('propagates @include on a fragment spread to the fields beneath it', async () => {
+        const project = await generate('conditional-fragment-spread', {
+            schema,
+            documents: [
+                `query GetUser($flag: Boolean!) {
+                    user { id ...UserDetail @include(if: $flag) }
+                }
+                fragment UserDetail on User { name age }`,
+            ],
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const bare = aGetUserQueryResponse();
+                export const overridden = aGetUserQueryResponse({ user: { name: 'Alice' } });
+            `,
+        });
+        assertCompiles(project);
+
+        const { bare, overridden } = (await project.load()) as any;
+        assert.deepEqual(Object.keys(bare.user), ['id']);
+        assert.deepEqual(Object.keys(overridden.user), ['id', 'name']);
+        assert.equal(overridden.user.name, 'Alice');
+    });
+
+    it('omits gated fields inside list elements and union branches', async () => {
+        const project = await generate('conditional-nested', {
+            schema,
+            documents: [
+                `query Search($flag: Boolean!) {
+                    requiredUsers { id name @include(if: $flag) }
+                    search {
+                        __typename
+                        ... on User { id name @include(if: $flag) }
+                        ... on Document { id title }
+                    }
+                }`,
+            ],
+            config: { listElementCount: 1 },
+            check: `
+                import { aSearchQueryResponse } from './mocks.js';
+                export const bare = aSearchQueryResponse();
+                export const overridden = aSearchQueryResponse({
+                    requiredUsers: [{ name: 'Alice' }],
+                    search: ({ User }) => [User({ name: 'Bob' })],
+                });
+                export const viaCallback = aSearchQueryResponse({
+                    requiredUsers: (make) => [make({ name: 'Carol' })],
+                });
+            `,
+        });
+        assertCompiles(project);
+
+        const { bare, overridden, viaCallback } = (await project.load()) as any;
+        assert.deepEqual(Object.keys(bare.requiredUsers[0]), ['id']);
+        assert.deepEqual(Object.keys(bare.search[0]), ['__typename', 'id', 'title']);
+        assert.deepEqual(Object.keys(overridden.requiredUsers[0]), ['id', 'name']);
+        assert.deepEqual(Object.keys(overridden.search[0]), ['__typename', 'id', 'name']);
+        assert.equal(overridden.search[0].name, 'Bob');
+        assert.deepEqual(Object.keys(viaCallback.requiredUsers[0]), ['id', 'name']);
+        assert.equal(viaCallback.requiredUsers[0].name, 'Carol');
+    });
+
+    it('compiles when every selected field is gated', async () => {
+        const project = await generate('conditional-all', {
+            schema,
+            documents: [
+                `query GetUser($flag: Boolean!) {
+                    user @include(if: $flag) { id }
+                    tags @include(if: $flag)
+                }`,
+            ],
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const bare = aGetUserQueryResponse();
+            `,
+        });
+        assertCompiles(project);
+
+        const { bare } = (await project.load()) as any;
+        assert.deepEqual(Object.keys(bare), []);
+    });
+
+    it('generates gated fields unconditionally under conditionalFields: include', async () => {
+        const project = await generate('conditional-include-mode', {
+            schema,
+            documents: [
+                `query GetUser($flag: Boolean!) {
+                    user { id name @include(if: $flag) }
+                }`,
+            ],
+            config: { conditionalFields: 'include' },
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const result = aGetUserQueryResponse();
+            `,
+        });
+        assertCompiles(project);
+
+        const { result } = (await project.load()) as any;
+        assert.deepEqual(Object.keys(result.user), ['id', 'name']);
+        assert.equal(typeof result.user.name, 'string');
+    });
+
     it('exports DeepPartial and a per-operation Overrides alias', async () => {
         const project = await generate('deep-partial-export', {
             schema,

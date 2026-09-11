@@ -16,6 +16,7 @@ import {
     isInterfaceType,
     isUnionType,
     FragmentDefinitionNode,
+    SelectionNode,
 } from 'graphql';
 import { Types } from '@graphql-codegen/plugin-helpers';
 import { pascalCase } from 'change-case-all';
@@ -24,11 +25,14 @@ const article = (word: string): string => /^[aeiou]/i.test(word) ? 'an' : 'a';
 import { RUNTIME_HELPERS } from './runtime.js';
 import { LeafGenerator } from './leafGenerator.js';
 
+export type ConditionalFieldsMode = 'omit' | 'include';
+
 export interface BuildOperationFactoriesArgs {
     schema: GraphQLSchema;
     documents: Types.DocumentFile[];
     listElementCount: number;
     prefix: string | undefined;
+    conditionalFields: ConditionalFieldsMode;
     generateLeaf: LeafGenerator;
 }
 
@@ -104,6 +108,7 @@ const collectFragments = (documents: Types.DocumentFile[]): Map<string, Fragment
 interface WalkContext {
     schema: GraphQLSchema;
     listElementCount: number;
+    conditionalFields: ConditionalFieldsMode;
     closures: string[];
     closureIdSeq: { n: number };
     generateLeaf: LeafGenerator;
@@ -348,30 +353,64 @@ const mergeFieldNodes = (a: FieldNode, b: FieldNode): FieldNode => {
     };
 };
 
+/**
+ * True when a `@skip`/`@include` on this node leaves the field's presence up to runtime
+ * variables. A statically resolved directive — `@skip(if: false)`, `@include(if: true)` —
+ * means the field is always sent, so it is not conditional.
+ */
+const hasConditionalDirective = (sel: SelectionNode): boolean =>
+    (sel.directives ?? []).some((directive) => {
+        const name = directive.name.value;
+        if (name !== 'skip' && name !== 'include') return false;
+        const arg = directive.arguments?.find((a) => a.name.value === 'if');
+        if (arg?.value.kind === Kind.BOOLEAN) {
+            return name === 'skip' ? arg.value.value : !arg.value.value;
+        }
+        return true;
+    });
+
+interface CollectedField {
+    node: FieldNode;
+    /** Every occurrence of this response key was gated on a `@skip`/`@include`. */
+    conditional: boolean;
+}
+
 const collectFields = (
     selectionSet: SelectionSetNode,
     concrete: GraphQLObjectType,
     ctx: WalkContext,
     seenFragments: Set<string>,
-    merged: Map<string, FieldNode>,
+    merged: Map<string, CollectedField>,
+    inheritedConditional = false,
 ): void => {
     for (const sel of selectionSet.selections) {
+        // A field selected twice is conditional only if every occurrence is gated, so the
+        // flag has to be tracked here: mergeFieldNodes keeps the first node's directives
+        // and drops the second's.
+        const conditional = inheritedConditional || hasConditionalDirective(sel);
         if (sel.kind === Kind.FIELD) {
             const key = sel.alias?.value ?? sel.name.value;
             const existing = merged.get(key);
-            merged.set(key, existing ? mergeFieldNodes(existing, sel) : sel);
+            merged.set(key, {
+                node: existing ? mergeFieldNodes(existing.node, sel) : sel,
+                conditional: existing ? existing.conditional && conditional : conditional,
+            });
         } else if (sel.kind === Kind.INLINE_FRAGMENT) {
             const cond = sel.typeCondition?.name.value;
             if (cond && !typeConditionMatches(ctx.schema, concrete, cond)) continue;
-            collectFields(sel.selectionSet, concrete, ctx, seenFragments, merged);
+            collectFields(sel.selectionSet, concrete, ctx, seenFragments, merged, conditional);
         } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
-            if (seenFragments.has(sel.name.value)) continue;
+            // Keyed on the flag as well as the name, so a fragment spread both gated and
+            // ungated in the same selection set contributes its ungated occurrence too.
+            // Still terminates on cycles: the flag only ever goes false -> true.
+            const fragKey = `${sel.name.value}:${conditional}`;
+            if (seenFragments.has(fragKey)) continue;
             const frag = ctx.fragments.get(sel.name.value);
             if (!frag) continue;
             const fragCond = frag.typeCondition.name.value;
             if (!typeConditionMatches(ctx.schema, concrete, fragCond)) continue;
-            seenFragments.add(sel.name.value);
-            collectFields(frag.selectionSet, concrete, ctx, seenFragments, merged);
+            seenFragments.add(fragKey);
+            collectFields(frag.selectionSet, concrete, ctx, seenFragments, merged, conditional);
         }
     }
 };
@@ -391,12 +430,21 @@ const walkSelectionSet = (
         concrete = picked;
     }
 
-    const merged = new Map<string, FieldNode>();
+    const merged = new Map<string, CollectedField>();
     collectFields(selectionSet, concrete, ctx, new Set(), merged);
 
     const entries: string[] = [];
-    for (const field of merged.values()) {
-        entries.push(walkField(field, concrete, ctx, overrideAccess));
+    for (const [key, field] of merged) {
+        const entry = walkField(field.node, concrete, ctx, overrideAccess);
+        if (field.conditional && ctx.conditionalFields === 'omit') {
+            // The server sends this field only when the variable says so, so leave it out
+            // unless the caller asked for it. Guarding rather than dropping the entry keeps
+            // an override from producing a partial object where the type promises a whole
+            // one, and skips the faker work when the field is absent.
+            entries.push(`...(_hasOverride(${overrideAccess}, '${key}') ? { ${entry} } : {})`);
+        } else {
+            entries.push(entry);
+        }
     }
     return `{\n            ${entries.join(',\n            ')},\n        }`;
 };
@@ -419,6 +467,7 @@ const buildFactory = (
     schema: GraphQLSchema,
     listElementCount: number,
     prefix: string | undefined,
+    conditionalFields: ConditionalFieldsMode,
     generateLeaf: LeafGenerator,
     fragments: Map<string, FragmentDefinitionNode>,
 ): string => {
@@ -429,6 +478,7 @@ const buildFactory = (
     const ctx: WalkContext = {
         schema,
         listElementCount,
+        conditionalFields,
         closures: [],
         closureIdSeq: { n: 0 },
         generateLeaf,
@@ -455,7 +505,17 @@ export const buildOperationFactories = (args: BuildOperationFactoriesArgs): Buil
     const fragments = collectFragments(args.documents);
 
     const factories = ops
-        .map((op) => buildFactory(op, args.schema, args.listElementCount, args.prefix, args.generateLeaf, fragments))
+        .map((op) =>
+            buildFactory(
+                op,
+                args.schema,
+                args.listElementCount,
+                args.prefix,
+                args.conditionalFields,
+                args.generateLeaf,
+                fragments,
+            ),
+        )
         .join('\n');
     const imports = ops.map((op) => operationTypeName(op));
     return {

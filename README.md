@@ -108,12 +108,42 @@ const data = aSearchQueryResponse({
 
 Without the callback, the alphabetically-first branch is used by default.
 
+### Conditional fields (`@skip` / `@include`)
+
+A field selected under `@skip` or `@include` is absent from the response whenever its
+variable says so, so by default the factory leaves it out — the same shape the server would
+send. The generated operation type marks these fields optional, so this type-checks.
+
+```graphql
+query GetUser($withEmail: Boolean!) {
+  user {
+    id
+    email @include(if: $withEmail)
+  }
+}
+```
+
+```ts
+aGetUserQueryResponse();
+// { user: { id: '…' } }
+
+aGetUserQueryResponse({ user: { email: 'alice@example.com' } });
+// { user: { id: '…', email: 'alice@example.com' } }
+```
+
+Overriding a conditional field brings it back in full, not just the keys you supplied. A
+field selected more than once counts as conditional only if *every* occurrence is gated, and
+a directive that resolves statically — `@skip(if: false)`, `@include(if: true)` — is not
+conditional at all. Set `conditionalFields: 'include'` to generate data for them
+unconditionally instead.
+
 ## Configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `typesFile` | `string` | **(required)** | Import path for the generated operation types |
 | `listElementCount` | `number` | `1` | Number of elements generated for list fields |
+| `conditionalFields` | `'omit' \| 'include'` | `'omit'` | Whether fields under `@skip`/`@include` are left out of the defaults |
 | `prefix` | `string` | auto (`a`/`an`) | Prefix for factory names (e.g. `mock` → `mockGetUserQueryResponse`) |
 | `scalars` | `Record<string, string>` | built-in defaults | Custom faker expressions per scalar type |
 

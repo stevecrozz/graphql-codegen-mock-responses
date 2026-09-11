@@ -1,6 +1,6 @@
 import { PluginFunction, Types } from '@graphql-codegen/plugin-helpers';
 import { GraphQLSchema } from 'graphql';
-import { buildOperationFactories } from './operationFactories.js';
+import { buildOperationFactories, ConditionalFieldsMode } from './operationFactories.js';
 import { createLeafGenerator, ScalarGenerators } from './leafGenerator.js';
 
 export interface MockResponsesPluginConfig {
@@ -8,6 +8,12 @@ export interface MockResponsesPluginConfig {
     operationTypesFile: string;
     listElementCount?: number;
     prefix?: string;
+    /**
+     * How to treat fields selected under `@skip`/`@include`. `'omit'` (the default) leaves
+     * them out of the defaults, matching a server that was told not to send them; `'include'`
+     * generates data for them unconditionally.
+     */
+    conditionalFields?: ConditionalFieldsMode;
     scalars?: ScalarGenerators;
 }
 
@@ -24,6 +30,12 @@ export const plugin: PluginFunction<MockResponsesPluginConfig> = (
     }
 
     const listElementCount = config.listElementCount ?? 1;
+    const conditionalFields = config.conditionalFields ?? 'omit';
+    if (conditionalFields !== 'omit' && conditionalFields !== 'include') {
+        throw new Error(
+            `graphql-codegen-mock-responses: "conditionalFields" must be "omit" or "include", got "${conditionalFields}".`,
+        );
+    }
     const enumTypes = new Set<string>();
     const generateLeaf = createLeafGenerator(config.scalars, enumTypes);
 
@@ -32,6 +44,7 @@ export const plugin: PluginFunction<MockResponsesPluginConfig> = (
         documents,
         listElementCount,
         prefix: config.prefix,
+        conditionalFields,
         generateLeaf,
     });
 

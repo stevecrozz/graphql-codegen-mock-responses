@@ -14,18 +14,19 @@ ergonomics, then the type-layer rewrite that subsumes several workarounds.
 | 3 | Export `DeepPartial` + per-operation `FooOverrides` alias | P0 | S | **done** |
 | 4 | Nullable lists lose both override callbacks | P0 | S | **done** |
 | 5 | Name the field when an array override isn't an array | P1 | S | open |
-| 6 | `@skip` / `@include` are ignored | P0 | M | open |
+| 6 | `@skip` / `@include` are ignored | P0 | M | **done** |
 | 7 | Warn on unreachable union branches | P1 | S | open |
 | 8 | `seed` config for deterministic factories | P1 | M | open |
 | 9 | Per-operation override types instead of generic `DeepPartial` | P2 | L | open |
 | 10 | Upstream: `typescript` + `typescript-operations` in one file duplicates enums | P1 | S | open |
 
-Issues 6, 8 and 9 change generated output or add config; batch them into one release
-rather than shipping a version per issue.
+Issues 8 and 9 change generated output or add config; batch them into one release rather
+than shipping a version per issue.
 
-Unreleased on `main`: 3 and 4. Both touch the type layer of the generated output — 4 is a
-strict widening (code that compiled still compiles), 3 is additive — so they can ship
-together with 2's README fix whenever the next release goes out.
+Unreleased on `main`: 3, 4 and 6. 4 is a strict widening of the override types (code that
+compiled still compiles) and 3 is additive, but **6 changes generated payloads** — anyone
+relying on a `@skip`/`@include` field being populated has to set `conditionalFields:
+'include'`. That makes the next release a minor bump with a changelog note, not a patch.
 
 ---
 
@@ -148,10 +149,10 @@ consumers and for helpers that have cast — still worth it, given the debugging
 received type, and the accepted forms. Consider the mirror case in `mergeOverrides`
 (`src/runtime.ts:39` silently takes an array override for a non-list field).
 
-## 6. `@skip` / `@include` are ignored — P0, M
+## 6. `@skip` / `@include` are ignored — P0, M — DONE
 
 *[review]* No directive handling anywhere in the walk. A field gated on
-`@include(if: $flag)` is emitted unconditionally with faker data, so the semantics flip
+`@include(if: $flag)` was emitted unconditionally with faker data, so the semantics flipped
 from "server omitted this" to "present with a random value".
 
 Worse than reported: `typescript-operations` types conditional fields as optional but
@@ -161,26 +162,49 @@ Worse than reported: `typescript-operations` types conditional fields as optiona
 export type QQuery = { user: { id: string, name?: string, nickname?: string | null } | null }
 ```
 
-— so for a conditional selection of a non-null schema field there is currently **no**
-escape hatch: `null` is a type error and `mergeOverrides` skips `undefined`
-(`src/runtime.ts:50`). The reviewer's `null` workaround only worked because their fields
-happened to be nullable.
+— so for a conditional selection of a non-null schema field there was **no** escape hatch:
+`null` is a type error and `mergeOverrides` skips `undefined` (`src/runtime.ts:50`). The
+reviewer's `null` workaround only worked because their fields happened to be nullable.
 
-**What:** omit conditionally-selected fields from the defaults by default (type-checks,
-because the operation type marks them optional), with `conditionalFields: 'omit' |
-'include'` to opt back in. Changes generated output — release alongside 8 and 9.
+**Landed:** conditional fields are left out of the defaults, with `conditionalFields: 'omit'
+| 'include'` (default `'omit'`) to opt back into the old behavior. Changes generated output.
 
-**Watch:**
-- A field is conditional only if *every* merged occurrence carries the directive.
-  `mergeFieldNodes` (`src/operationFactories.ts:339`) keeps the first node's attributes
-  and drops the second's directives, so the flag has to be tracked in `collectFields`
-  rather than read off the merged node.
-- `@skip`/`@include` on fragment spreads and inline fragments must propagate to the
-  fields collected beneath them.
-- If we omit a field the operation type marks required, the emitted
-  `const defaults: T = {...}` fails to compile. Loud rather than silent, but the harness
-  from issue 1 should assert it doesn't happen for the mixed conditional/unconditional
-  case.
+Rather than dropping the entry, the emitted literal guards it:
+
+```js
+...(_hasOverride(overrides?.user, 'name') ? { name: faker.lorem.word() } : {}),
+```
+
+Plain omission would have made `mergeOverrides(undefined, { name: 'x' })` hand the partial
+straight back, so overriding a conditional *object* field would yield an object missing the
+rest of its keys while claiming the full type — the bug class this plugin exists to catch.
+The guard also skips the faker call when the field is absent. TypeScript models a
+conditional spread as an optional property, which is exactly what the operation type
+declares, so `const defaults: T = {…}` still checks — including when every selected field is
+gated.
+
+Resolved from the watch list:
+- Conditionality is tracked in `collectFields` and merged with `&&`, so a field selected
+  both gated and ungated stays unconditional. `mergeFieldNodes` drops the second node's
+  directives, so reading it off the merged node would have been wrong.
+- `@skip`/`@include` on fragment spreads and inline fragments propagate to the fields
+  beneath. The fragment-spread cycle guard is now keyed on name *and* the flag, so the same
+  fragment spread gated in one place and ungated in another still contributes its ungated
+  occurrence. Terminates because the flag only goes false → true.
+- Statically resolvable directives (`@skip(if: false)`, `@include(if: true)`) are treated as
+  unconditional; the inverse pair is treated as conditional, which in `'omit'` mode is the
+  right answer anyway.
+- No case found where an omitted field is required in the operation type, so the
+  fails-to-compile scenario stays hypothetical. `conditional-all` pins the all-gated case.
+
+**Covered by:** `conditional-omit`, `conditional-override`, `conditional-merged`,
+`conditional-fragment-spread`, `conditional-nested` (list elements and union branches, where
+the override access is a closure parameter rather than `overrides`), `conditional-all`,
+`conditional-include-mode`. README documents the behavior and the config.
+
+**Note for issue 8:** the guard means a conditional field's faker calls only run when it is
+overridden, so the random sequence for later fields shifts with the override set. Same input
+still gives the same output, so the determinism promise holds, but worth stating.
 
 ## 7. Warn on unreachable union branches — P1, S
 
