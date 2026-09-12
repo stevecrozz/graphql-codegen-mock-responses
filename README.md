@@ -22,21 +22,31 @@ npm install -D graphql-codegen-mock-responses @faker-js/faker
 
 ## Setup
 
-```yaml
-# codegen.ts
+```ts
+// codegen.ts
 import type { CodegenConfig } from '@graphql-codegen/cli';
 
 const config: CodegenConfig = {
   schema: './schema.graphql',
   documents: './src/**/*.graphql',
   generates: {
+    // Schema types: enums, inputs, scalars.
+    './src/__generated__/schema.ts': {
+      plugins: ['typescript'],
+    },
+    // Operation types, importing the schema types rather than re-declaring them.
     './src/__generated__/types.ts': {
-      plugins: ['typescript', 'typescript-operations'],
+      plugins: ['typescript-operations'],
+      config: {
+        // Relative to the project root, not to this output file.
+        importSchemaTypesFrom: './src/__generated__/schema',
+      },
     },
     './src/__generated__/mocks.ts': {
       plugins: ['graphql-codegen-mock-responses'],
       config: {
-        typesFile: './types',
+        typesFile: './schema',
+        operationTypesFile: './types',
       },
     },
   },
@@ -44,6 +54,30 @@ const config: CodegenConfig = {
 
 export default config;
 ```
+
+Both paths are required: `typesFile` is where the generated file imports enums from, and
+`operationTypesFile` is where it imports operation types from. Both are emitted verbatim as
+import specifiers, so they are relative to the generated mocks file — unlike
+`importSchemaTypesFrom` above, which the operations plugin resolves from the project root and
+rewrites. Easy to get backwards; if you see an import like `'../../schema'` in the generated
+operation types, that's this.
+
+**Why schema types and operation types go in separate files.** With `typescript-operations`
+v6, putting both plugins in one output file declares every enum and input an operation
+touches twice — once as `export enum Status`, once as `export type Status = 'ACTIVE' | …` —
+and the file does not compile:
+
+```
+error TS2567: Enum declarations can only merge with namespace or other enum declarations.
+```
+
+Setting `importSchemaTypesFrom` tells the operations plugin to import those types instead of
+re-emitting them, which requires them to be in a different file. Pinning both plugins to v4
+also avoids it.
+
+If your project resolves modules as ESM (`moduleResolution: node16`/`nodenext`), add
+`emitLegacyCommonJSImports: false` to the operations plugin config and write the paths with
+extensions — `./schema.js`, `./types.js` — so the emitted imports resolve.
 
 ## Usage
 
@@ -76,6 +110,22 @@ const data = aGetUserQueryResponse({
   user: { name: 'Alice', avatar: { url: 'https://example.com/alice.png' } },
 });
 ```
+
+### Override types
+
+Each factory is accompanied by an exported type for its overrides, so helpers that wrap a
+factory can be typed without reaching into its parameters:
+
+```ts
+import { aGetUserQueryResponse, GetUserQueryOverrides } from './__generated__/mocks';
+
+const buildUser = (overrides?: GetUserQueryOverrides) =>
+  aGetUserQueryResponse({ user: { name: 'Alice' }, ...overrides });
+```
+
+The alias is named after the operation type, so `prefix` does not affect it. `DeepPartial` is
+exported too, if you need to build one of these yourself: `GetUserQueryOverrides` is exactly
+`DeepPartial<GetUserQuery>`.
 
 ### Lists
 
@@ -141,7 +191,8 @@ unconditionally instead.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `typesFile` | `string` | **(required)** | Import path for the generated operation types |
+| `typesFile` | `string` | **(required)** | Import path for the schema types file (the `typescript` plugin's output) — where enums are imported from |
+| `operationTypesFile` | `string` | **(required)** | Import path for the operation types file (the `typescript-operations` plugin's output) |
 | `listElementCount` | `number` | `1` | Number of elements generated for list fields |
 | `conditionalFields` | `'omit' \| 'include'` | `'omit'` | Whether fields under `@skip`/`@include` are left out of the defaults |
 | `prefix` | `string` | auto (`a`/`an`) | Prefix for factory names (e.g. `mock` → `mockGetUserQueryResponse`) |
@@ -151,14 +202,20 @@ unconditionally instead.
 
 Override the generated expression for any scalar type:
 
-```yaml
-config:
-  typesFile: ./types
-  scalars:
-    DateTime: "faker.date.past().toISOString()"
-    URL: "faker.internet.url()"
-    Email: "faker.internet.email()"
+```ts
+config: {
+  typesFile: './schema',
+  operationTypesFile: './types',
+  scalars: {
+    DateTime: 'faker.date.past().toISOString()',
+    URL: 'faker.internet.url()',
+    Email: 'faker.internet.email()',
+  },
+}
 ```
+
+The value is inlined as a raw expression, so it does not have to be a faker call — any
+expression valid at that position works, including a literal.
 
 ### Built-in scalar defaults
 
@@ -170,11 +227,40 @@ config:
 | `Boolean` | `faker.datatype.boolean()` |
 | `ID` | `faker.string.uuid()` |
 
+### Determinism
+
+Generated values are random on purpose, and there is no `seed` option. Pin the values a test
+depends on, at the call site:
+
+```ts
+const data = anAgreementQueryResponse({ agreement: { archived: false } });
+```
+
+A test that asserts on a value it never pinned is coupled to data it doesn't state, and
+random defaults surface that immediately instead of at some unrelated CI run months later.
+This matters most for booleans, where any fixed default is indistinguishable from a
+deliberate one.
+
+If you do want reproducible output — for snapshot tests, say — seed faker yourself. The
+generated module uses the shared instance, so this is all it takes:
+
+```ts
+import { faker } from '@faker-js/faker';
+
+beforeEach(() => faker.seed(42));
+```
+
+Seeding per test keeps determinism scoped to a boundary you control. Note that a single
+`faker.seed()` in global setup does not: values depend on how many draws happened earlier in
+the run, so adding or reordering a test shifts everything after it.
+
 ## How it works
 
-The plugin walks each named operation's selection set against your schema, generating a factory function typed as `(overrides?: DeepPartial<OperationType>) => OperationType`. Nested objects are recursively constructed. The `DeepPartial` type allows overriding at any depth while keeping the return type fully concrete.
+The plugin walks each named operation's selection set against your schema, generating a factory function typed as `(overrides?: <Op>Overrides) => <Op>`. Nested objects are recursively constructed. The `DeepPartial` type behind `<Op>Overrides` allows overriding at any depth while keeping the return type fully concrete.
 
-Fragment spreads, inline fragments, aliases, and `__typename` are all handled. Union/interface fields with multiple inline fragment branches generate per-branch closure functions and a dispatcher.
+Fragment spreads, inline fragments, aliases, `__typename`, and `@skip`/`@include` are all handled. Union/interface fields with multiple inline fragment branches generate per-branch closure functions and a dispatcher.
+
+Because the override type is derived from the operation type, overriding a field the operation does not select is a type error — which catches hand-written fixtures that drifted from their query.
 
 ## License
 

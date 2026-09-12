@@ -465,6 +465,58 @@ describe('generated output compiles and runs', () => {
         assert.equal(typeof result.user.name, 'string');
     });
 
+    // The generated module imports the shared faker singleton, so consumers get
+    // determinism by seeding it in their own test setup. That is the only seeding story
+    // this plugin ships (see ISSUES.md #8), so it must not regress into a module-private
+    // Faker instance.
+    it('honors a seed set by the consumer on the shared faker instance', async () => {
+        const project = await generate('consumer-seeded-faker', {
+            schema,
+            documents: [`query GetUser { user { id name age } }`],
+            check: `
+                import { faker } from '@faker-js/faker';
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const seeded = () => {
+                    faker.seed(42);
+                    return aGetUserQueryResponse();
+                };
+            `,
+        });
+        assertCompiles(project);
+
+        const { seeded } = (await project.load()) as any;
+        assert.deepEqual(seeded(), seeded());
+    });
+
+    // `scalars` takes raw expressions, so literals make the whole output deterministic
+    // without a seeded PRNG. This is the recipe the README recommends for snapshot tests.
+    it('produces identical output when scalars are configured as literals', async () => {
+        const project = await generate('deterministic-scalars', {
+            schema,
+            documents: [`query GetUser { user { id name age status } tags }`],
+            config: {
+                scalars: {
+                    String: `'string'`,
+                    Int: '1',
+                    ID: `'id'`,
+                },
+            },
+            check: `
+                import { aGetUserQueryResponse } from './mocks.js';
+                export const first = aGetUserQueryResponse();
+                export const second = aGetUserQueryResponse();
+            `,
+        });
+        assertCompiles(project);
+
+        const { first, second } = (await project.load()) as any;
+        assert.deepEqual(first, second);
+        assert.deepEqual(first, {
+            user: { id: 'id', name: 'string', age: 1, status: 'ACTIVE' },
+            tags: ['string'],
+        });
+    });
+
     it('exports DeepPartial and a per-operation Overrides alias', async () => {
         const project = await generate('deep-partial-export', {
             schema,

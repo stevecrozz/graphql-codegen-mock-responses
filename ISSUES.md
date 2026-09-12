@@ -10,13 +10,13 @@ ergonomics, then the type-layer rewrite that subsumes several workarounds.
 | # | Title | Priority | Size | Status |
 |---|-------|----------|------|--------|
 | 1 | Compile-and-run test harness for generated output | P0 | M | **done** |
-| 2 | README documents a config that throws | P0 | S | open |
+| 2 | README documents a config that throws | P0 | S | **done** |
 | 3 | Export `DeepPartial` + per-operation `FooOverrides` alias | P0 | S | **done** |
 | 4 | Nullable lists lose both override callbacks | P0 | S | **done** |
 | 5 | Name the field when an array override isn't an array | P1 | S | open |
 | 6 | `@skip` / `@include` are ignored | P0 | M | **done** |
 | 7 | Warn on unreachable union branches | P1 | S | open |
-| 8 | `seed` config for deterministic factories | P1 | M | open |
+| 8 | `seed` config for deterministic factories | — | — | **closed, not doing** |
 | 9 | Per-operation override types instead of generic `DeepPartial` | P2 | L | open |
 | 10 | Upstream: `typescript` + `typescript-operations` in one file duplicates enums | P1 | S | open |
 
@@ -70,15 +70,44 @@ in the fix.
 **Also landed:** `@graphql-codegen/typescript` and `typescript-operations` as
 devDependencies. Verified from a clean `node_modules` that nothing else is needed.
 
-## 2. README documents a config that throws — P0, S
+## 2. README documents a config that throws — P0, S — DONE
 
-*[own]* `operationTypesFile` is required (`src/index.ts:22`) but appears in neither the
-Setup example nor the config table. Copying the README verbatim throws at codegen time.
+*[own]* `operationTypesFile` is required (`src/index.ts:22`) but appeared in neither the
+Setup example nor the config table. Copying the README verbatim threw at codegen time.
 
-**What:** fix the Setup snippet and the config table; state what each of the two paths
-points at (`typesFile` → enums from `typescript`, `operationTypesFile` → operation types
-from `typescript-operations`). Sweep the rest of the README for the same drift while in
-there.
+The Setup snippet was wrong a second way: it emitted `typescript` and `typescript-operations`
+into a single output file, which does not compile (issue 10).
+
+**Landed.** Setup now shows the three-file layout with `importSchemaTypesFrom`, both required
+paths, and what each points at (`typesFile` → schema types, where enums come from;
+`operationTypesFile` → operation types). Config table has an `operationTypesFile` row and a
+corrected `typesFile` description. Also fixed in the sweep:
+
+- the Setup block was fenced as `yaml` while containing TypeScript;
+- the custom-scalars example passed only `typesFile`, so it would have thrown too;
+- `How it works` still described the factory signature as `DeepPartial<OperationType>`
+  (it's `<Op>Overrides` since issue 3) and didn't mention `@skip`/`@include`;
+- the exported override types from issue 3 and the `conditionalFields` option from issue 6
+  were undocumented; both now have sections.
+
+**Verified, not just proofread.** Built a throwaway project containing only the packages the
+README tells you to install, put the Setup snippet in it as `codegen.ts` verbatim, ran
+`npx graphql-codegen`, and type-checked the output under `--strict`: clean, including an
+operation touching an enum, a `<Op>Overrides` import, and a list callback. The *old* one-file
+recipe, run the same way, gives `TS2567` on a doubly-declared enum, confirming the note the
+README now carries. This covers the extensionless/bundler-resolution variant;
+`tests/compile.spec.ts` covers the ESM `.js` variant.
+
+**The first version of this fix was still broken, and only the real CLI caught it.**
+`importSchemaTypesFrom` is resolved relative to the *project root* and rewritten relative to
+the output file, so `'./schema'` alongside an output of `./src/__generated__/types.ts` emits
+`import … from '../../schema'` — `TS2307`. The correct value is
+`'./src/__generated__/schema'`. Our own `typesFile`/`operationTypesFile` are the opposite:
+emitted verbatim, so relative to the generated file. The README now states both.
+
+An earlier pass at this used `@graphql-codegen/core` with flat filenames instead of the CLI,
+which put every file in one directory and made the path bug invisible. Worth remembering: for
+anything path-shaped, reproduce with the real output layout.
 
 ## 3. Export `DeepPartial` + per-operation `FooOverrides` alias — P0, S — DONE
 
@@ -226,29 +255,58 @@ was chosen, and the branches that are unreachable, with "add `__typename` to ena
 branch selection" as the remedy. Config `onUnreachableBranch: 'warn' | 'error' |
 'silent'`, default `warn`.
 
-## 8. `seed` config for deterministic factories — P1, M
+## 8. `seed` config for deterministic factories — CLOSED, not doing
 
 *[review]* Nothing calls `faker.seed`, so any field a test transitively depends on has to
-be pinned or the spec flakes. Cited as the single most expensive thing about migrating
-off `graphql-codegen-typescript-mock-data`, with three real spec failures traced to it.
+be pinned or the spec flakes. Cited as the single most expensive thing about migrating off
+`graphql-codegen-typescript-mock-data`, with three real spec failures traced to it.
 
-**What:** `seed?: number`. Re-seed at the top of *each factory body* with
-`seed ^ hash(operationName)`:
-- per-call re-seeding makes a given factory reproducible regardless of call order (a
-  single module-level seed does not — values would still depend on call sequence);
-- mixing in the operation name keeps different operations from producing identical
-  values;
-- the sequence still advances within a call, so list elements stay distinct.
+**Not building it.** Three reasons, in order of weight.
 
-Use a module-private `new Faker({ locale: [en, base] })` instance rather than the shared
-export, so seeding doesn't hijack the user's own `faker` calls. User-supplied `scalars`
-expressions reference `faker.…` and resolve to the module-private const unchanged. Keep
-the plain `import { faker }` path when `seed` is unset — no behavior change for existing
-users.
+**1. Consumers already have a better version of this feature.** The generated module imports
+the shared `@faker-js/faker` singleton, so `faker.seed(42)` in a test setup file already
+makes every factory reproducible — verified by `consumer-seeded-faker`. And
+`beforeEach(() => faker.seed(n))` scopes determinism to a *test*, which is the boundary that
+actually matters and the one a codegen plugin cannot see. The `seed ^ hash(operationName)`
+scheme was an attempt to reconstruct that boundary from inside the library, and it paid for
+the guess with "two calls to the same factory return identical payloads."
 
-**Acceptance:** harness test asserting two calls to the same factory deep-equal, two
-different factories don't collide on `id`, and `listElementCount: 3` yields three
-distinct elements.
+**2. The reported failures were booleans, and no deterministic scheme protects those.**
+`archived`, `hidden`, `embedEnabled` — for a `Boolean` there are two values, both meaningful,
+and no third value that can signal "nobody pinned this." Any deterministic choice is
+indistinguishable from a deliberate one. Randomness is the only mechanism that surfaces an
+accidental dependency on an unpinned boolean, and at a 50% failure rate it surfaces on the
+first or second run rather than next quarter. `seed` would have hidden three real test bugs.
+
+**3. Faker does not promise value stability across versions.** Seeded reproducibility is a
+guarantee built on a dependency that declines to make it; a faker major would break exactly
+the snapshots the seed was protecting, in a diff that looks like noise.
+
+**Obligation this creates on us:** keep generating `import { faker } from '@faker-js/faker'`.
+A module-private `new Faker({...})` instance — which the original plan for this issue called
+for — would silently break consumer-side seeding. `consumer-seeded-faker` is the regression
+test for that.
+
+**If a snapshot suite ever turns up**, the design is worked out and needs no `seed`.
+Determinism is a per-scalar question, and the deciding test is *can a fixed value for this
+scalar be mistaken for a meaningful one?*
+
+| Scalar | Default | Why |
+|---|---|---|
+| `String` | a `«Type.field»` label | deterministic, and announces itself in a snapshot diff |
+| `ID` | label + element index | deterministic *and* unique, so normalizing caches don't collapse rows |
+| `Int`/`Float`/`DateTime`/`URL` | fixed plausible constant | must stay parseable; no label possible |
+| `Boolean`, enums | **random** | no value can signal "unpinned" — keep fuzzing |
+
+`scalars` already takes raw expressions, so most of that is a documented preset rather than
+new machinery (`deterministic-scalars` pins it). The one missing piece is the element index:
+there is currently no expression a user can write that varies per list element without being
+random, so deterministic + unique is unreachable today. Element closures already exist and
+would just need to take an `_i`. Defer until someone needs it.
+
+**Do not** blanket-recommend literal `scalars` as a determinism recipe: `ID: "'id'"` gives
+every element of a list the same id, and under Apollo/urql normalization those rows collapse
+into one, silently. Worse failure than a flaky boolean.
 
 ## 9. Per-operation override types instead of generic `DeepPartial` — P2, L
 
@@ -287,11 +345,33 @@ references unless `importSchemaTypesFrom` is set
 (`node_modules/@graphql-codegen/typescript-operations/cjs/index.js:92`), and it has no way
 to know the `typescript` plugin already emitted them into the same file.
 
-Not our bug, but our documented setup trips over it, so:
-- **What:** reproduce minimally and file upstream. Meanwhile add a README note with the
-  two workarounds — split schema types and operation types into separate files and set
-  `importSchemaTypesFrom` (what the harness does), or pin the plugins to v4.
-- Fold the README note into issue 2 rather than shipping it separately.
+Not our bug, but our documented setup tripped over it.
+
+**Done:** the README note (issue 2) documents both workarounds — split the schema types and
+operation types into separate files with `importSchemaTypesFrom` (what the harness and the
+Setup recipe now do), or pin both plugins to v4.
+
+**Still open: filing it upstream.** Minimal repro, confirmed through `@graphql-codegen/core`
+so it is not an artifact of calling the plugins directly — `typescript` and
+`typescript-operations` on one output file, with any operation selecting an enum:
+
+```
+types.ts(27,13): error TS2567: Enum declarations can only merge with namespace or other enum declarations.
+types.ts(32,13): error TS2567: ...
+```
+
+`export enum Status` from `typescript` on line 27, `export type Status = 'ACTIVE' | …` from
+`typescript-operations` on line 32. Present on `typescript@6.1.0` +
+`typescript-operations@6.1.5`, absent on the v4 pair.
+
+Filing it is a human call — I'm not posting to their tracker.
+
+**Not an upstream problem, for the record:** `@graphql-codegen/cli` appeared uninstallable at
+every version, with published packages depending on unpublished ones (`cli@7.4.0` →
+`plugin-helpers@^7.3.0`, `cli@7.3.1` → `typescript-operations@^6.1.6`). That is the corp
+Artifactory mirror's cooldown on recently-published versions, not a publishing bug. Installing
+with `--registry=https://registry.npmjs.org/` works. Worth remembering the next time a
+dependency range looks impossible.
 
 ---
 
