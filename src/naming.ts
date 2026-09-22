@@ -7,7 +7,7 @@ import { pascalCase } from 'change-case-all';
  * `operationTypesFile` is named by the `typescript` / `typescript-operations` plugins, not by
  * us. Those plugins run schema names through `convertName`, so we have to run them through the
  * same function with the same config or we emit imports for names that were never exported --
- * `AIStatus` where `typescript` wrote `AiStatus` (ISSUES.md #11).
+ * `AIStatus` where `typescript` wrote `AiStatus`.
  *
  * Defaults here mirror those plugins' defaults rather than being required, so the common case
  * stays correct without the user restating config they already gave the `typescript` plugin.

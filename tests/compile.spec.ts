@@ -139,7 +139,7 @@ describe('generated output compiles and runs', () => {
     });
 
     // Every combination of list and element nullability: only the outer one ever reached
-    // the array branch of DeepPartial before ISSUES.md #4.
+    // the array branch of DeepPartial before it was fixed.
     it('accepts the callback form for every list nullability shape', async () => {
         const project = await generate('list-nullability-matrix', {
             schema,
@@ -467,8 +467,7 @@ describe('generated output compiles and runs', () => {
 
     // The generated module imports the shared faker singleton, so consumers get
     // determinism by seeding it in their own test setup. That is the only seeding story
-    // this plugin ships (see ISSUES.md #8), so it must not regress into a module-private
-    // Faker instance.
+    // this plugin ships, so it must not regress into a module-private Faker instance.
     it('honors a seed set by the consumer on the shared faker instance', async () => {
         const project = await generate('consumer-seeded-faker', {
             schema,
@@ -562,7 +561,7 @@ describe('generated output compiles and runs', () => {
  * Every identifier this plugin emits that also has to exist in typesFile or
  * operationTypesFile is named by the `typescript` plugins, which run schema names through
  * `namingConvention`. `pascalCase` is a fix-point for most names, so these cases all use
- * names where it is not: consecutive capitals. See ISSUES.md #11.
+ * names where it is not: consecutive capitals.
  */
 describe('naming convention agrees with the typescript plugins', () => {
     const acronymSchema = buildSchema(`

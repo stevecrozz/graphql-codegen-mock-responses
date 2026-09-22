@@ -66,7 +66,7 @@ const pluginOutputToString = (output: Types.PluginOutput | string): string => {
  * Schema types (schema.ts) and operation types (types.ts) go in separate files, with the
  * operations plugin pointed at the first via importSchemaTypesFrom. Emitting both plugins
  * into one file — the layout our README recommends — currently produces a duplicate
- * declaration for every enum and input an operation touches; see ISSUES.md #10.
+ * declaration for every enum and input an operation touches.
  */
 const generateSchemaTypes = async (
     schema: GraphQLSchema,

@@ -7,7 +7,7 @@ import { NamingConfig, createNaming } from './naming.js';
 /**
  * The naming keys have to match whatever `typescript` / `typescript-operations` were given,
  * since this plugin imports the identifiers those plugins emit. They default to the same
- * defaults, so the common case needs no config; see naming.ts and ISSUES.md #11.
+ * defaults, so the common case needs no config; see naming.ts.
  */
 export interface MockResponsesPluginConfig extends NamingConfig {
     typesFile: string;
