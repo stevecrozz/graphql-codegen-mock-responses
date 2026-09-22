@@ -38,17 +38,16 @@
   "license": "MIT",
   "peerDependencies": {
     "@faker-js/faker": ">=9.0.0",
-    "@graphql-codegen/plugin-helpers": "^5.0.0",
-    "@graphql-codegen/visitor-plugin-common": ">=5.0.0",
     "graphql": "^16.0.0"
   },
   "dependencies": {
+    "@graphql-codegen/plugin-helpers": "^5.1.1",
+    "@graphql-codegen/visitor-plugin-common": "^7.2.4",
     "change-case-all": "^2.1.0",
     "sentence-case": "^4.0.0"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.9.0",
-    "@graphql-codegen/plugin-helpers": "^5.1.1",
     "@graphql-codegen/typescript": "^6.1.0",
     "@graphql-codegen/typescript-operations": "^6.1.5",
     "graphql": "^16.0.0",
