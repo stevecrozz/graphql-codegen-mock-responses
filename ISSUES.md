@@ -19,14 +19,16 @@ ergonomics, then the type-layer rewrite that subsumes several workarounds.
 | 8 | `seed` config for deterministic factories | — | — | **closed, not doing** |
 | 9 | Per-operation override types instead of generic `DeepPartial` | P2 | L | open |
 | 10 | Upstream: `typescript` + `typescript-operations` in one file duplicates enums | P1 | S | open |
+| 11 | Type names bypass the `typescript` plugin's naming convention | P0 | M | **done** |
 
 Issues 8 and 9 change generated output or add config; batch them into one release rather
 than shipping a version per issue.
 
-Unreleased on `main`: 3, 4 and 6. 4 is a strict widening of the override types (code that
-compiled still compiles) and 3 is additive, but **6 changes generated payloads** — anyone
-relying on a `@skip`/`@include` field being populated has to set `conditionalFields:
-'include'`. That makes the next release a minor bump with a changelog note, not a patch.
+Released in 0.4.0: 1, 2, 3, 4 and 6.
+
+11 is the next release. It only changes output for schemas that have a name `pascalCase`
+does not fix-point on, and for those the current output does not compile at all — so it is
+a bug fix, not a breaking change, despite touching generated identifiers.
 
 ---
 
@@ -372,6 +374,121 @@ every version, with published packages depending on unpublished ones (`cli@7.4.0
 Artifactory mirror's cooldown on recently-published versions, not a publishing bug. Installing
 with `--registry=https://registry.npmjs.org/` works. Worth remembering the next time a
 dependency range looks impossible.
+
+---
+
+## 11. Type names bypass the `typescript` plugin's naming convention — P0, M — DONE
+
+*[review, verified]* `src/leafGenerator.ts:40,53` pascal-cases the enum *value* and passes the
+enum *type* through raw:
+
+```ts
+enumTypes?.add(named.name);
+return `${named.name}.${pascalCase(firstValue.name)}`;
+```
+
+`named.name` is the schema name. The identifier that exists in `typesFile` is whatever
+`@graphql-codegen/typescript` called it, and that plugin runs every name through
+`convertName`, whose default `namingConvention` is `change-case-all#pascalCase`. For almost
+every name that is identity — `SpaceLinkDeleteAccess` → `SpaceLinkDeleteAccess` — which is
+why it went unnoticed. It diverges on consecutive capitals:
+
+| schema | `typescript` emits | we emit |
+|---|---|---|
+| `AIDataRoomAssistantAccessStatus` | `AiDataRoomAssistantAccessStatus` | `AIDataRoomAssistantAccessStatus` |
+| `NDAStatus` | `NdaStatus` | `NDAStatus` |
+| `ISO8601Timestamp` | `Iso8601Timestamp` | `ISO8601Timestamp` |
+
+Confirmed end to end: `@graphql-codegen/typescript` on `enum AIStatus { ACTIVE }` emits
+`export enum AiStatus`. `enumTypes` feeds the import list (`src/index.ts:62`), so the
+generated module imports a name that is not exported:
+
+```
+error TS2724: '"./types"' has no exported member named 'AIDataRoomAssistantAccessStatus'.
+  Did you mean 'AiDataRoomAssistantAccessStatus'?
+```
+
+Because it is an import failure rather than a bad expression, one such enum anywhere in the
+document set takes down the whole generated file, not just the factory that selects it.
+
+**Blocking, not cosmetic.** Downstream this is the sole reason the plugin is gated to a
+single package; the package it was wanted for selects one of these enums and cannot compile.
+
+**Scope.** Both sites have to agree — one produces the import, the other the reference, so
+converting only one trades TS2724 for an unresolved identifier. There is no shippable
+partial, which is why this is one M ticket and not an S plus a follow-up. Four things are
+in scope, all verified against `node_modules`:
+
+1. **Enum type names** — `convertName(node, { useTypesPrefix: enumPrefix, useTypesSuffix: enumSuffix })`
+   (`visitor-plugin-common/cjs/base-types-visitor.js:305`).
+2. **Enum value names** — also convention-dependent, so `pascalCase(firstValue.name)` is
+   wrong too. Under `namingConvention: 'keep'` the member is `ACTIVE`, not `Active`; with
+   `typesSuffix: 'T'` it is `ActiveT`. Uses `useTypesPrefix: false` and
+   `transformUnderscore` only when the name is not all underscores
+   (`convert-schema-enum-to-declaration-block-string.js:118`).
+3. **Operation type names** — `src/operationFactories.ts:64` hardcodes
+   `${pascalCase(op.name)}${Query|Mutation|Subscription}`, the same failure against
+   `operationTypesFile`. Wider than `namingConvention` alone; `omitOperationSuffix`,
+   `dedupeOperationSuffix` and `operationResultSuffix` all move the name:
+
+   ```
+   {}                          -> GetUserQuery
+   {omitOperationSuffix: true} -> GetUser
+   {namingConvention: 'keep'}  -> GETUserQuery
+   {typesSuffix: 'T'}          -> GetUserQueryT
+   ```
+
+   The suffix is concatenated *before* conversion (`base-documents-visitor.js:123-129`), so
+   `GETUser` + `Query` converts as one string.
+4. **`visitor-plugin-common` as a declared dependency.** It is *not* a transitive dep of
+   `plugin-helpers` (whose deps are `@graphql-tools/utils`, `change-case-all`,
+   `common-tags`, `import-from`, `lodash`, `tslib`) — it resolves today only because the
+   `typescript` plugins are devDeps here. Add it as a peer dependency alongside
+   `plugin-helpers`, since `typesFile` already implies the user runs those plugins.
+
+**Not in scope:** `nextClosureName` at `src/operationFactories.ts:174`. Those `make<Hint>_<n>`
+identifiers are locals inside the generated module, never imported and not public surface, so
+there is no convention to agree with. `factoryName` at `:66` consumes the converted operation
+type name and so changes with it — that is the exported factory name, a public-API effect but
+not a compile failure.
+
+**Default, not required.** `namingConvention` mirrors the `typescript` plugin's default
+rather than being mandatory when `typesFile` is set. `convertFactory({})` *is* the same
+default resolution that plugin uses, so mirroring reuses its logic instead of guessing;
+requiring the key would break every existing user for no gain in the common case, and would
+not even prevent mismatch (nothing stops someone setting `'keep'` here and forgetting it
+there). Express the coupling in code and docs.
+
+**Why the harness missed it:** `tests/compile.spec.ts:39` declares `enum Status`, a name
+`pascalCase` fix-points on, so the enum case passes while the bug is live. Regression tests
+need an enum whose name is not already pascal-case (`enum AIStatus` is the one-character
+repro) plus a `namingConvention: 'keep'` case pinning that conversion follows config rather
+than being hardcoded in the other direction.
+
+**Related:** issue 10 is the other failure mode of the same coupling — this plugin has to
+agree with the `typescript` plugin about what the schema types are named *and* where they
+live.
+
+**Done.** `src/naming.ts` centralizes every identifier that has to match, built on
+`convertFactory` and mirroring `convertName`/`getOperationSuffix` call-for-call, with the
+upstream source location cited at each mirrored site. All eight naming keys are read off
+config. `visitor-plugin-common` is now a declared peer dependency (`>=5.0.0`, since the
+installed tree is on 7.2.4 while `plugin-helpers` is on 5.1.1 — the majors are not in step).
+
+Two things the report did not have:
+
+- **An all-underscore enum value was a syntax error, not a naming mismatch.**
+  `pascalCase('_')` returns the empty string, so `enum Underscored { _ }` generated
+  `Underscored.` — unparseable. `typescript` emits `_`, because it only collapses underscores
+  when the name is not entirely underscores. Fixed by the same guard and pinned by its own
+  test.
+- **Enum *values* were wrong too**, not just type names — `namingConvention: 'keep'` wants
+  `ACTIVE`, and `typesSuffix: 'T'` wants `ActiveT`. `typesPrefix` notably does *not* apply to
+  members, only `typesSuffix`.
+
+`nextClosureName` was left on `pascalCase` as scoped. Six regression tests, all confirmed
+failing against the old code first; the `_` case was verified red by restoring the old
+`transformUnderscore: true` behaviour.
 
 ---
 

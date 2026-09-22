@@ -19,6 +19,13 @@ export interface GenerateOptions {
     /** Plugin config; typesFile and operationTypesFile are supplied. */
     config?: Omit<MockResponsesPluginConfig, 'typesFile' | 'operationTypesFile'>;
     /**
+     * Config forwarded to `typescript` and `typescript-operations`. Naming keys
+     * (`namingConvention`, `typesPrefix`, `typesSuffix`, ...) have to be given here *and* in
+     * `config` to mirror a real codegen.yml, since the generated module has to agree with
+     * the identifiers those plugins emit.
+     */
+    typesConfig?: Record<string, unknown>;
+    /**
      * Consumer source type-checked against the generated factories, and executed by
      * load(). Import from './mocks.js' and export whatever the test asserts on.
      */
@@ -61,15 +68,23 @@ const pluginOutputToString = (output: Types.PluginOutput | string): string => {
  * into one file — the layout our README recommends — currently produces a duplicate
  * declaration for every enum and input an operation touches; see ISSUES.md #10.
  */
-const generateSchemaTypes = async (schema: GraphQLSchema, documents: Types.DocumentFile[]): Promise<string> =>
-    pluginOutputToString(await typescriptPlugin.plugin(schema, documents, {}, { outputFile: 'schema.ts' }));
+const generateSchemaTypes = async (
+    schema: GraphQLSchema,
+    documents: Types.DocumentFile[],
+    typesConfig: Record<string, unknown>,
+): Promise<string> =>
+    pluginOutputToString(await typescriptPlugin.plugin(schema, documents, { ...typesConfig }, { outputFile: 'schema.ts' }));
 
-const generateOperationTypes = async (schema: GraphQLSchema, documents: Types.DocumentFile[]): Promise<string> =>
+const generateOperationTypes = async (
+    schema: GraphQLSchema,
+    documents: Types.DocumentFile[],
+    typesConfig: Record<string, unknown>,
+): Promise<string> =>
     pluginOutputToString(
         await typescriptOperationsPlugin.plugin(
             schema,
             documents,
-            { importSchemaTypesFrom: './schema.js', emitLegacyCommonJSImports: false },
+            { ...typesConfig, importSchemaTypesFrom: './schema.js', emitLegacyCommonJSImports: false },
             { outputFile: 'types.ts' },
         ),
     );
@@ -81,8 +96,9 @@ const generateOperationTypes = async (schema: GraphQLSchema, documents: Types.Do
  */
 export const generate = async (name: string, options: GenerateOptions): Promise<GeneratedProject> => {
     const documents = toDocumentFiles(options.documents);
-    const schemaSource = await generateSchemaTypes(options.schema, documents);
-    const typesSource = await generateOperationTypes(options.schema, documents);
+    const typesConfig = options.typesConfig ?? {};
+    const schemaSource = await generateSchemaTypes(options.schema, documents, typesConfig);
+    const typesSource = await generateOperationTypes(options.schema, documents, typesConfig);
     const mocksSource = String(
         mockResponsesPlugin(options.schema, documents, {
             ...options.config,

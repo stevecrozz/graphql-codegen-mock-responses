@@ -2,8 +2,14 @@ import { PluginFunction, Types } from '@graphql-codegen/plugin-helpers';
 import { GraphQLSchema } from 'graphql';
 import { buildOperationFactories, ConditionalFieldsMode } from './operationFactories.js';
 import { createLeafGenerator, ScalarGenerators } from './leafGenerator.js';
+import { NamingConfig, createNaming } from './naming.js';
 
-export interface MockResponsesPluginConfig {
+/**
+ * The naming keys have to match whatever `typescript` / `typescript-operations` were given,
+ * since this plugin imports the identifiers those plugins emit. They default to the same
+ * defaults, so the common case needs no config; see naming.ts and ISSUES.md #11.
+ */
+export interface MockResponsesPluginConfig extends NamingConfig {
     typesFile: string;
     operationTypesFile: string;
     listElementCount?: number;
@@ -36,8 +42,9 @@ export const plugin: PluginFunction<MockResponsesPluginConfig> = (
             `graphql-codegen-mock-responses: "conditionalFields" must be "omit" or "include", got "${conditionalFields}".`,
         );
     }
+    const naming = createNaming(config);
     const enumTypes = new Set<string>();
-    const generateLeaf = createLeafGenerator(config.scalars, enumTypes);
+    const generateLeaf = createLeafGenerator(config.scalars, enumTypes, naming);
 
     const { output, operationTypeImports } = buildOperationFactories({
         schema,
@@ -46,6 +53,7 @@ export const plugin: PluginFunction<MockResponsesPluginConfig> = (
         prefix: config.prefix,
         conditionalFields,
         generateLeaf,
+        naming,
     });
 
     const enumTypeImports = Array.from(enumTypes).sort();

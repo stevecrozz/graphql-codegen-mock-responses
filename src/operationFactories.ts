@@ -24,6 +24,7 @@ import { sentenceCase } from 'sentence-case';
 const article = (word: string): string => /^[aeiou]/i.test(word) ? 'an' : 'a';
 import { RUNTIME_HELPERS } from './runtime.js';
 import { LeafGenerator } from './leafGenerator.js';
+import { Naming, createNaming } from './naming.js';
 
 export type ConditionalFieldsMode = 'omit' | 'include';
 
@@ -34,6 +35,8 @@ export interface BuildOperationFactoriesArgs {
     prefix: string | undefined;
     conditionalFields: ConditionalFieldsMode;
     generateLeaf: LeafGenerator;
+    /** Names operation result types to match operationTypesFile; see naming.ts. */
+    naming?: Naming;
 }
 
 export interface BuildOperationFactoriesResult {
@@ -47,26 +50,9 @@ const operationLocation = (op: OperationDefinitionNode): string => {
     return `${src}:${line}`;
 };
 
-const operationTypeSuffix = (op: OperationDefinitionNode): string => {
-    switch (op.operation) {
-        case 'query':
-            return 'Query';
-        case 'mutation':
-            return 'Mutation';
-        case 'subscription':
-            return 'Subscription';
-        default:
-            throw new Error(`Unknown operation type: ${op.operation}`);
-    }
-};
-
-const operationTypeName = (op: OperationDefinitionNode): string =>
-    `${pascalCase(op.name!.value)}${operationTypeSuffix(op)}`;
-
-const factoryName = (op: OperationDefinitionNode, prefix: string | undefined): string => {
-    const tn = operationTypeName(op);
-    const art = prefix !== undefined ? prefix : article(sentenceCase(tn).split(' ')[0]);
-    return `${art}${tn}Response`;
+const factoryName = (typeName: string, prefix: string | undefined): string => {
+    const art = prefix !== undefined ? prefix : article(sentenceCase(typeName).split(' ')[0]);
+    return `${art}${typeName}Response`;
 };
 
 const collectOperations = (documents: Types.DocumentFile[]): OperationDefinitionNode[] => {
@@ -470,11 +456,12 @@ const buildFactory = (
     conditionalFields: ConditionalFieldsMode,
     generateLeaf: LeafGenerator,
     fragments: Map<string, FragmentDefinitionNode>,
+    naming: Naming,
 ): string => {
     const opType = schema.getRootType(op.operation);
     if (!opType) return '';
-    const typeName = operationTypeName(op);
-    const fnName = factoryName(op, prefix);
+    const typeName = naming.operationType(op);
+    const fnName = factoryName(typeName, prefix);
     const ctx: WalkContext = {
         schema,
         listElementCount,
@@ -503,6 +490,7 @@ export const buildOperationFactories = (args: BuildOperationFactoriesArgs): Buil
     if (ops.length === 0) return { output: '', operationTypeImports: [] };
 
     const fragments = collectFragments(args.documents);
+    const naming = args.naming ?? createNaming();
 
     const factories = ops
         .map((op) =>
@@ -514,10 +502,11 @@ export const buildOperationFactories = (args: BuildOperationFactoriesArgs): Buil
                 args.conditionalFields,
                 args.generateLeaf,
                 fragments,
+                naming,
             ),
         )
         .join('\n');
-    const imports = ops.map((op) => operationTypeName(op));
+    const imports = ops.map((op) => naming.operationType(op));
     return {
         output: `\n${RUNTIME_HELPERS}\n${factories}`,
         operationTypeImports: imports,

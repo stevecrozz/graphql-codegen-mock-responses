@@ -5,7 +5,7 @@ import {
     isEnumType,
     getNamedType,
 } from 'graphql';
-import { pascalCase } from 'change-case-all';
+import { Naming, createNaming } from './naming.js';
 
 export interface ScalarGenerators {
     [scalarName: string]: string;
@@ -24,7 +24,16 @@ export type LeafGenerator = (typeName: string, fieldName: string, gqlType: Graph
 export const createLeafGenerator = (
     customScalars?: ScalarGenerators,
     enumTypes?: Set<string>,
+    naming: Naming = createNaming(),
 ): LeafGenerator => {
+    // The name recorded here is the one imported from typesFile, so it has to be the converted
+    // name rather than the schema name -- see naming.ts.
+    const enumMember = (schemaTypeName: string, schemaValueName: string): string => {
+        const typeName = naming.enumType(schemaTypeName);
+        enumTypes?.add(typeName);
+        return `${typeName}.${naming.enumValue(schemaValueName)}`;
+    };
+
     return (_typeName, _fieldName, gqlType) => {
         let t = gqlType;
         if (isNonNullType(t)) t = t.ofType;
@@ -37,8 +46,7 @@ export const createLeafGenerator = (
             if (isEnumType(named)) {
                 const firstValue = named.getValues()[0];
                 if (!firstValue) return 'null';
-                enumTypes?.add(named.name);
-                return `${named.name}.${pascalCase(firstValue.name)}`;
+                return enumMember(named.name, firstValue.name);
             }
             const scalar = customScalars?.[named.name] ?? BUILT_IN_SCALARS[named.name];
             return scalar ?? `'${named.name}-scalar'`;
@@ -50,8 +58,7 @@ export const createLeafGenerator = (
         if (isEnumType(named)) {
             const firstValue = named.getValues()[0];
             if (!firstValue) return 'null';
-            enumTypes?.add(named.name);
-            return `${named.name}.${pascalCase(firstValue.name)}`;
+            return enumMember(named.name, firstValue.name);
         }
 
         const scalar = customScalars?.[named.name] ?? BUILT_IN_SCALARS[named.name];

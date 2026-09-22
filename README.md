@@ -198,6 +198,55 @@ unconditionally instead.
 | `prefix` | `string` | auto (`a`/`an`) | Prefix for factory names (e.g. `mock` → `mockGetUserQueryResponse`) |
 | `scalars` | `Record<string, string>` | built-in defaults | Custom faker expressions per scalar type |
 
+Plus the naming options below, which have to match the `typescript` plugins.
+
+### Naming options
+
+This plugin imports the identifiers the `typescript` and `typescript-operations` plugins
+emit, and those plugins rename everything they generate according to their own config. If
+you set any of these keys on them, set the same value here, or the generated module will
+import names that were never exported.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `namingConvention` | `string \| fn \| { typeNames, enumValues }` | `change-case-all#pascalCase` | Must match the `typescript` plugins' `namingConvention` |
+| `typesPrefix` | `string` | `''` | Prefix added to generated type names |
+| `typesSuffix` | `string` | `''` | Suffix added to generated type names |
+| `enumPrefix` | `boolean` | `true` | Whether `typesPrefix` applies to enum type names |
+| `enumSuffix` | `boolean` | `true` | Whether `typesSuffix` applies to enum type names |
+| `omitOperationSuffix` | `boolean` | `false` | Drops the `Query`/`Mutation`/`Subscription` suffix from operation type names |
+| `dedupeOperationSuffix` | `boolean` | `false` | Drops that suffix only when the operation name already ends with it |
+| `operationResultSuffix` | `string` | `''` | Extra suffix on the operation result type |
+
+The defaults are the same defaults those plugins use, so the common case needs none of this.
+You only need these keys if you have already set them elsewhere:
+
+```yaml
+generates:
+  src/gql/schema.ts:
+    plugins: [typescript]
+    config:
+      namingConvention: keep
+  src/gql/types.ts:
+    plugins: [typescript-operations]
+    config:
+      namingConvention: keep
+      importSchemaTypesFrom: ./schema.js
+  src/gql/mocks.ts:
+    plugins: [graphql-codegen-mock-responses]
+    config:
+      typesFile: ./schema.js
+      operationTypesFile: ./types.js
+      namingConvention: keep # <- same value as above
+```
+
+The failure mode when they disagree is a compile error on the import rather than a wrong
+value, so it is loud — but it takes out the whole generated file, not just one factory:
+
+```
+error TS2724: './schema.js' has no exported member named 'AIStatus'. Did you mean 'AiStatus'?
+```
+
 ### Custom scalars
 
 Override the generated expression for any scalar type:

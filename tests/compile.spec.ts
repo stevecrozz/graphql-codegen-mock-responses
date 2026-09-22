@@ -557,3 +557,126 @@ describe('generated output compiles and runs', () => {
         assertTypeErrors(project, [/'name' does not exist in type/]);
     });
 });
+
+/**
+ * Every identifier this plugin emits that also has to exist in typesFile or
+ * operationTypesFile is named by the `typescript` plugins, which run schema names through
+ * `namingConvention`. `pascalCase` is a fix-point for most names, so these cases all use
+ * names where it is not: consecutive capitals. See ISSUES.md #11.
+ */
+describe('naming convention agrees with the typescript plugins', () => {
+    const acronymSchema = buildSchema(`
+        type Query {
+            status: AIStatus!
+            statuses: [AIStatus!]!
+            label: String!
+        }
+
+        enum AIStatus {
+            ACTIVE
+            NOT_READY
+        }
+    `);
+
+    it('converts enum type names the way the typescript plugin does', async () => {
+        const project = await generate('naming-enum-acronym', {
+            schema: acronymSchema,
+            documents: [`query GetStatus { status statuses }`],
+            check: `
+                import { aGetStatusQueryResponse } from './mocks.js';
+                export const result = aGetStatusQueryResponse({});
+            `,
+        });
+        assertCompiles(project);
+
+        assert.match(project.schemaSource, /export enum AiStatus/);
+        const { result } = (await project.load()) as any;
+        assert.equal(result.status, 'ACTIVE');
+        assert.deepEqual(result.statuses, ['ACTIVE']);
+    });
+
+    it('follows namingConvention: keep for enum types and values', async () => {
+        const project = await generate('naming-enum-keep', {
+            schema: acronymSchema,
+            documents: [`query GetStatus { status }`],
+            config: { namingConvention: 'keep' },
+            typesConfig: { namingConvention: 'keep' },
+            check: `
+                import { aGetStatusQueryResponse } from './mocks.js';
+                export const result = aGetStatusQueryResponse({});
+            `,
+        });
+        assertCompiles(project);
+
+        assert.match(project.schemaSource, /export enum AIStatus/);
+        assert.match(project.mocksSource, /AIStatus\.ACTIVE/);
+    });
+
+    it('applies typesPrefix and typesSuffix to enum types and values', async () => {
+        const project = await generate('naming-enum-affixes', {
+            schema: acronymSchema,
+            documents: [`query GetStatus { status }`],
+            config: { typesPrefix: 'Sdk', typesSuffix: 'T' },
+            typesConfig: { typesPrefix: 'Sdk', typesSuffix: 'T' },
+            check: `
+                import { aSdkGetStatusQueryTResponse } from './mocks.js';
+                export const result = aSdkGetStatusQueryTResponse({});
+            `,
+        });
+        assertCompiles(project);
+
+        // typesPrefix does not apply to enum members, only typesSuffix -- mirroring
+        // buildEnumValuesBlock's useTypesPrefix: false.
+        assert.match(project.schemaSource, /export enum SdkAiStatusT/);
+        assert.match(project.mocksSource, /SdkAiStatusT\.ActiveT/);
+    });
+
+    it('keeps an all-underscore enum value intact', async () => {
+        // pascalCase('_') is the empty string, which emitted `Underscored.` -- a syntax error,
+        // not just a wrong name. typescript leaves it as `_`.
+        const project = await generate('naming-enum-underscore', {
+            schema: buildSchema(`
+                type Query { value: Underscored! }
+                enum Underscored { _ OTHER }
+            `),
+            documents: [`query GetValue { value }`],
+            check: `
+                import { aGetValueQueryResponse } from './mocks.js';
+                export const result = aGetValueQueryResponse({});
+            `,
+        });
+        assertCompiles(project);
+
+        assert.match(project.mocksSource, /Underscored\._/);
+        const { result } = (await project.load()) as any;
+        assert.equal(result.value, '_');
+    });
+
+    it('converts operation type names the way typescript-operations does', async () => {
+        const project = await generate('naming-operation-acronym', {
+            schema: acronymSchema,
+            documents: [`query GETStatus { label }`],
+            check: `
+                import { aGetStatusQueryResponse } from './mocks.js';
+                export const result = aGetStatusQueryResponse({});
+            `,
+        });
+        assertCompiles(project);
+
+        assert.match(project.typesSource, /export type GetStatusQuery/);
+    });
+
+    it('follows omitOperationSuffix for operation type names', async () => {
+        const project = await generate('naming-operation-omit-suffix', {
+            schema: acronymSchema,
+            documents: [`query GetStatus { label }`],
+            config: { omitOperationSuffix: true },
+            typesConfig: { omitOperationSuffix: true },
+            check: `
+                import { aGetStatusResponse } from './mocks.js';
+                export const result = aGetStatusResponse({});
+            `,
+        });
+        assertCompiles(project);
+    });
+});
