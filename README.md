@@ -311,6 +311,28 @@ Fragment spreads, inline fragments, aliases, `__typename`, and `@skip`/`@include
 
 Because the override type is derived from the operation type, overriding a field the operation does not select is a type error — which catches hand-written fixtures that drifted from their query.
 
+## Releasing
+
+Two commands:
+
+```bash
+npm version minor   # or patch / major
+npm publish
+```
+
+Everything else is a hook or config, so there is nothing else to remember:
+
+| Wired up by | What it does |
+|---|---|
+| `preversion` | Runs the test suite. A failing suite aborts the release before anything is written. |
+| `npm version` | Bumps `package.json`, commits, and creates the `v`-prefixed annotated tag. Refuses to run on a dirty tree. |
+| `.npmrc` `sign-git-tag=true` | Makes that tag GPG-signed. |
+| `postversion` | `git push --follow-tags` — pushes the commit and the tag together. |
+| `prepublishOnly` | Runs `tsc`, so the published `dist/` is always built from the tagged source. |
+| `publishConfig.registry` | Pins publishing to npmjs, so a global registry override cannot redirect it. |
+
+`npm publish` stays manual on purpose: it is the one irreversible step, and it needs an OTP.
+
 ## License
 
 MIT

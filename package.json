@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsc",
     "test": "node --import tsx --test tests/**/*.spec.ts",
+    "preversion": "npm test",
+    "postversion": "git push --follow-tags",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
